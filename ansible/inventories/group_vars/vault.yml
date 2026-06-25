@@ -1,0 +1,46 @@
+---
+vault_version: ""
+
+vault_user: vault
+vault_group: vault
+
+vault_config_dir: /etc/vault.d
+vault_config_file: /etc/vault.d/vault.hcl
+vault_data_dir: /opt/vault/data
+vault_tls_dir: /etc/vault.d/tls
+
+vault_http_addr: "http://{{ ansible_host }}:8200"
+vault_https_addr: "https://{{ ansible_host }}:8200"
+
+vault_api_addr: "https://{{ ansible_host }}:8200"
+vault_cluster_addr: "https://{{ ansible_host }}:8201"
+
+vault_listener_address: "0.0.0.0:8200"
+vault_cluster_address: "0.0.0.0:8201"
+
+vault_disable_mlock: true
+
+vault_pki_mount: pki
+vault_pki_max_lease_ttl: "87600h"
+
+vault_ca_common_name: "RateLVIG Root CA"
+vault_ca_ttl: "87600h"
+
+vault_pki_role_name: "ratelvig-server"
+vault_pki_allowed_domains:
+  - "ratelvig.local"
+
+vault_server_common_name: "vault.ratelvig.local"
+vault_server_alt_names: []
+
+vault_server_ip_sans:
+  - "{{ ansible_host }}"
+vault_server_ttl: "8760h"
+
+vault_health_status_codes:
+  - 200
+  - 429
+  - 472
+  - 473
+  - 501
+  - 503

@@ -1,0 +1,292 @@
+---
+- name: Verify vault token is defined
+  ansible.builtin.assert:
+    that:
+      - vault_token is defined
+      - vault_token | length > 0
+    fail_msg: "vault_root_token must be defined in ../vault/secrets.yml."
+  no_log: true
+
+- name: Verify Vault unseal keys are defined
+  ansible.builtin.assert:
+    that:
+      - vault_unseal_keys is defined
+      - vault_unseal_keys | length > 0
+    fail_msg: "vault_unseal_keys must be defined in ../vault/secrets.yml."
+  no_log: true
+
+- name: Install Python dependencies required by Vault modules
+  ansible.builtin.apt:
+    name:
+      - python3-hvac
+      - python3-requests
+    state: present
+    update_cache: true
+
+- name: Check if Vault is available via HTTPS
+  ansible.builtin.uri:
+    url: "{{ vault_https_addr }}/v1/sys/health"
+    method: GET
+    status_code: "{{ vault_health_status_codes }}"
+    validate_certs: false
+  register: vault_https_health
+  retries: 15
+  delay: 2
+  until: vault_https_health.status is defined and vault_https_health.status in vault_health_status_codes
+  failed_when: false
+
+- name: Check if Vault is available via HTTP
+  ansible.builtin.uri:
+    url: "{{ vault_http_addr }}/v1/sys/health"
+    method: GET
+    status_code: "{{ vault_health_status_codes }}"
+    validate_certs: false
+  register: vault_http_health
+  retries: 15
+  delay: 2
+  until: vault_http_health.status is defined and vault_http_health.status in vault_health_status_codes
+  failed_when: false
+  when: vault_https_health.status is not defined or vault_https_health.status not in vault_health_status_codes
+
+- name: Verify Vault is reachable
+  ansible.builtin.assert:
+    that:
+      - >
+        (
+          vault_https_health.status is defined
+          and vault_https_health.status in vault_health_status_codes
+        )
+        or
+        (
+          vault_http_health.status is defined
+          and vault_http_health.status in vault_health_status_codes
+        )
+    fail_msg: "Vault is not reachable via HTTP or HTTPS."
+
+- name: Define active Vault address
+  ansible.builtin.set_fact:
+    vault_active_addr: >-
+      {{
+        vault_https_addr
+        if vault_https_health.status is defined and vault_https_health.status in vault_health_status_codes
+        else vault_http_addr
+      }}
+
+- name: Display active Vault address
+  ansible.builtin.debug:
+    msg: "Using Vault address: {{ vault_active_addr }}"
+
+- name: Ensure Vault TLS directory exists
+  ansible.builtin.file:
+    path: "{{ vault_tls_dir }}"
+    state: directory
+    owner: root
+    group: "{{ vault_group }}"
+    mode: "0750"
+
+- name: Check existing Vault mounts
+  ansible.builtin.uri:
+    url: "{{ vault_active_addr }}/v1/sys/mounts"
+    method: GET
+    headers:
+      X-Vault-Token: "{{ vault_token }}"
+    status_code: "200"
+    validate_certs: false
+  register: vault_mounts
+
+- name: Activate the PKI engine
+  community.hashi_vault.vault_write:
+    url: "{{ vault_active_addr }}"
+    token: "{{ vault_token }}"
+    path: "sys/mounts/{{ vault_pki_mount }}"
+    data:
+      type: pki
+      description: "Internal PKI for ratelvig.local"
+      config:
+        max_lease_ttl: "{{ vault_pki_max_lease_ttl }}"
+    validate_certs: false
+  register: vault_pki_mount_result
+  when: "(vault_pki_mount ~ '/') not in vault_mounts.json.data"
+
+- name: Configure the maximum TTL for the PKI engine
+  changed_when: false
+  community.hashi_vault.vault_write:
+    url: "{{ vault_active_addr }}"
+    token: "{{ vault_token }}"
+    path: "sys/mounts/{{ vault_pki_mount }}/tune"
+    data:
+      max_lease_ttl: "{{ vault_pki_max_lease_ttl }}"
+    validate_certs: false
+
+- name: Check if a CA already exists
+  ansible.builtin.uri:
+    url: "{{ vault_active_addr }}/v1/{{ vault_pki_mount }}/ca/pem"
+    method: GET
+    headers:
+      X-Vault-Token: "{{ vault_token }}"
+    status_code:
+      - 200
+      - 204
+      - 400
+      - 404
+    validate_certs: false
+  register: vault_existing_ca
+
+- name: Generate the internal CA root
+  community.hashi_vault.vault_write:
+    url: "{{ vault_active_addr }}"
+    token: "{{ vault_token }}"
+    path: "{{ vault_pki_mount }}/root/generate/internal"
+    data:
+      common_name: "{{ vault_ca_common_name }}"
+      ttl: "{{ vault_ca_ttl }}"
+    validate_certs: false
+  when: vault_existing_ca.status != 200
+  no_log: true
+
+- name: Configure the URLs for the PKI
+  changed_when: false
+  community.hashi_vault.vault_write:
+    url: "{{ vault_active_addr }}"
+    token: "{{ vault_token }}"
+    path: "{{ vault_pki_mount }}/config/urls"
+    data:
+      issuing_certificates: "{{ vault_https_addr }}/v1/{{ vault_pki_mount }}/ca"
+      crl_distribution_points: "{{ vault_https_addr }}/v1/{{ vault_pki_mount }}/crl"
+    validate_certs: false
+
+- name: Create the homelab PKI role
+  changed_when: false
+  community.hashi_vault.vault_write:
+    url: "{{ vault_active_addr }}"
+    token: "{{ vault_token }}"
+    path: "{{ vault_pki_mount }}/roles/{{ vault_pki_role_name }}"
+    data:
+      allowed_domains: "{{ vault_pki_allowed_domains }}"
+      allow_subdomains: true
+      allow_bare_domains: true
+      allow_localhost: true
+      allow_ip_sans: true
+      allow_any_name: false
+      enforce_hostnames: false
+      server_flag: true
+      client_flag: true
+      key_type: rsa
+      key_bits: 4096
+      max_ttl: "{{ vault_server_ttl }}"
+    validate_certs: false
+
+- name: Check if Vault TLS certificate already exists
+  ansible.builtin.stat:
+    path: "{{ vault_tls_dir }}/vault.crt"
+  register: vault_tls_certificate_file
+
+- name: Check if Vault TLS private key already exists
+  ansible.builtin.stat:
+    path: "{{ vault_tls_dir }}/vault.key"
+  register: vault_tls_private_key_file
+
+- name: Generate a certificate for the Vault server
+  community.hashi_vault.vault_write:
+    url: "{{ vault_active_addr }}"
+    token: "{{ vault_token }}"
+    path: "{{ vault_pki_mount }}/issue/{{ vault_pki_role_name }}"
+    data:
+      common_name: "{{ vault_server_common_name }}"
+      alt_names: "{{ vault_server_alt_names | join(',') }}"
+      ip_sans: "{{ vault_server_ip_sans | join(',') }}"
+      ttl: "{{ vault_server_ttl }}"
+    validate_certs: false
+  register: vault_server_certificate
+  no_log: true
+  when: not vault_tls_certificate_file.stat.exists or not vault_tls_private_key_file.stat.exists
+
+- name: Install the Vault server certificate
+  ansible.builtin.template:
+    src: vault.crt.j2
+    dest: "{{ vault_tls_dir }}/vault.crt"
+    owner: root
+    group: "{{ vault_group }}"
+    mode: "0640"
+  notify:
+    - Restart Vault
+  when: vault_server_certificate is changed
+
+- name: Install the Vault server private key
+  ansible.builtin.template:
+    src: vault.key.j2
+    dest: "{{ vault_tls_dir }}/vault.key"
+    owner: root
+    group: "{{ vault_group }}"
+    mode: "0640"
+  notify:
+    - Restart Vault
+  when: vault_server_certificate is changed
+
+- name: Deploy the Vault HTTPS configuration
+  ansible.builtin.template:
+    src: vault-https.hcl.j2
+    dest: "{{ vault_config_file }}"
+    owner: root
+    group: "{{ vault_group }}"
+    mode: "0640"
+  notify:
+    - Restart Vault
+
+- name: Run handlers immediately
+  ansible.builtin.meta: flush_handlers
+
+- name: Wait for Vault to be available via HTTPS after restart
+  ansible.builtin.uri:
+    url: "{{ vault_https_addr }}/v1/sys/health"
+    method: GET
+    status_code: "{{ vault_health_status_codes }}"
+    validate_certs: false
+  register: vault_https_health_after_restart
+  retries: 30
+  delay: 2
+  until: >
+    vault_https_health_after_restart.status is defined
+    and vault_https_health_after_restart.status in vault_health_status_codes
+
+- name: Unseal Vault after HTTPS restart
+  ansible.builtin.include_role:
+    name: unseal_vault
+  vars:
+    vault_addr: "{{ vault_https_addr }}"
+
+- name: Verify final Vault health via HTTPS
+  ansible.builtin.uri:
+    url: "{{ vault_https_addr }}/v1/sys/health"
+    method: GET
+    status_code: "{{ vault_health_status_codes }}"
+    validate_certs: false
+  register: vault_final_health
+
+- name: Read Vault Root CA certificate
+  ansible.builtin.uri:
+    url: "{{ vault_https_addr }}/v1/{{ vault_pki_mount }}/ca/pem"
+    method: GET
+    headers:
+      X-Vault-Token: "{{ vault_token }}"
+    status_code:
+      - 200
+    return_content: true
+    validate_certs: false
+  register: vault_root_ca_certificate
+
+- name: Display final information
+  ansible.builtin.debug:
+    msg:
+      - "Vault is now configured in HTTPS."
+      - "URL: {{ vault_https_addr }}"
+      - "UI: {{ vault_https_addr }}/ui"
+      - "PKI enabled on path: {{ vault_pki_mount }}/"
+      - "CA common name: {{ vault_ca_common_name }}"
+      - "Server certificate present: {{ vault_tls_certificate_file.stat.exists or vault_server_certificate is changed }}"
+      - "Server private key present: {{ vault_tls_private_key_file.stat.exists or vault_server_certificate is changed }}"
+      - "Vault health status: {{ vault_final_health.status }}"
+      - "Vault sealed: {{ vault_final_seal_status.json.sealed | default('unknown') }}"
+      - "Vault Root CA certificate:"
+      - "{{ vault_root_ca_certificate.content }}"
+      - "Remember to trust the Vault CA on your client machines."

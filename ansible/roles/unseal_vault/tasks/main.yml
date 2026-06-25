@@ -1,0 +1,65 @@
+---
+- name: Verify Vault unseal address is defined
+  ansible.builtin.assert:
+    that:
+      - vault_addr is defined
+      - vault_addr | length > 0
+    fail_msg: "vault_addr must be defined before using the unseal_vault role."
+
+- name: Verify Vault unseal keys are defined
+  ansible.builtin.assert:
+    that:
+      - vault_unseal_keys is defined
+      - vault_unseal_keys | length > 0
+    fail_msg: "vault_unseal_keys must be defined before using the unseal_vault role."
+  no_log: true
+
+- name: Verify Vault status
+  ansible.builtin.uri:
+    url: "{{ vault_addr }}/v1/sys/seal-status"
+    method: GET
+    validate_certs: "{{ vault_unseal_validate_certs }}"
+    status_code: "{{ vault_unseal_expected_status_codes }}"
+  register: vault_seal_status
+
+- name: Display current Vault status
+  ansible.builtin.debug:
+    msg:
+      - "Initialized: {{ vault_seal_status.json.initialized }}"
+      - "Sealed: {{ vault_seal_status.json.sealed }}"
+      - "Progress: {{ vault_seal_status.json.progress | default(0) }}/{{ vault_seal_status.json.t | default('?') }}"
+
+- name: Unseal Vault with unseal keys
+  ansible.builtin.uri:
+    url: "{{ vault_addr }}/v1/sys/unseal"
+    method: PUT
+    body_format: json
+    body:
+      key: "{{ item }}"
+    validate_certs: "{{ vault_unseal_validate_certs }}"
+    status_code: "{{ vault_unseal_expected_status_codes }}"
+  loop: "{{ vault_unseal_keys }}"
+  no_log: true
+  when: vault_seal_status.json.sealed | bool
+
+- name: Verify final Vault status
+  ansible.builtin.uri:
+    url: "{{ vault_addr }}/v1/sys/seal-status"
+    method: GET
+    validate_certs: "{{ vault_unseal_validate_certs }}"
+    status_code: "{{ vault_unseal_expected_status_codes }}"
+  register: vault_final_seal_status
+
+- name: Assert Vault is unsealed
+  ansible.builtin.assert:
+    that:
+      - not vault_final_seal_status.json.sealed | bool
+    fail_msg: "Vault is still sealed after attempting unseal."
+    success_msg: "Vault is unsealed and operational."
+
+- name: Display final Vault status
+  ansible.builtin.debug:
+    msg:
+      - "Initialized: {{ vault_final_seal_status.json.initialized }}"
+      - "Sealed: {{ vault_final_seal_status.json.sealed }}"
+      - "Vault is operational if Sealed is false."

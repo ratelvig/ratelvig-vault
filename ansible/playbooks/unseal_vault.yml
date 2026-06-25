@@ -1,0 +1,14 @@
+---
+- name: Unseal HashiCorp Vault
+  hosts: vault
+  become: false
+  gather_facts: false
+
+  vars_files:
+    - ../vault/secrets.yml
+
+
+  roles:
+    - role: unseal_vault
+      vars:
+        vault_addr: "{{ vault_https_addr }}"
