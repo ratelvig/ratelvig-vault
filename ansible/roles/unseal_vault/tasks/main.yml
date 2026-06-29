@@ -6,14 +6,6 @@
       - vault_addr | length > 0
     fail_msg: "vault_addr must be defined before using the unseal_vault role."
 
-- name: Verify Vault unseal keys are defined
-  ansible.builtin.assert:
-    that:
-      - vault_unseal_keys is defined
-      - vault_unseal_keys | length > 0
-    fail_msg: "vault_unseal_keys must be defined before using the unseal_vault role."
-  no_log: true
-
 - name: Verify Vault status
   ansible.builtin.uri:
     url: "{{ vault_addr }}/v1/sys/seal-status"
@@ -21,6 +13,7 @@
     validate_certs: "{{ vault_unseal_validate_certs }}"
     status_code: "{{ vault_unseal_expected_status_codes }}"
   register: vault_seal_status
+  changed_when: false
 
 - name: Display current Vault status
   ansible.builtin.debug:
@@ -29,18 +22,70 @@
       - "Sealed: {{ vault_seal_status.json.sealed }}"
       - "Progress: {{ vault_seal_status.json.progress | default(0) }}/{{ vault_seal_status.json.t | default('?') }}"
 
-- name: Unseal Vault with unseal keys
+- name: Initialize Vault operator
+  ansible.builtin.uri:
+    url: "{{ vault_addr }}/v1/sys/init"
+    method: PUT
+    body_format: json
+    body:
+      secret_shares: "{{ vault_init_secret_shares | int }}"
+      secret_threshold: "{{ vault_init_secret_threshold | int }}"
+    validate_certs: "{{ vault_unseal_validate_certs }}"
+    status_code: "{{ vault_unseal_expected_status_codes }}"
+  register: vault_operator_init
+  changed_when: true
+  when: not vault_seal_status.json.initialized | bool
+
+- name: Expose generated Vault credentials for this play
+  ansible.builtin.set_fact:
+    vault_unseal_keys: "{{ vault_operator_init.json.keys_base64 }}"
+    vault_token: "{{ vault_operator_init.json.root_token }}"
+  when: vault_operator_init is changed
+
+- name: Display generated Vault initial credentials
+  ansible.builtin.debug:
+    msg:
+      - "Vault was initialized with {{ vault_init_secret_shares }} unseal key and a threshold of {{ vault_init_secret_threshold }}."
+      - "Vault unseal key: {{ vault_operator_init.json.keys_base64[0] }}"
+      - "Vault root token: {{ vault_operator_init.json.root_token }}"
+      - "Store these values in ansible/vault/secrets.yml for future idempotent runs."
+  when: vault_operator_init is changed
+
+- name: Refresh Vault status before unseal
+  ansible.builtin.uri:
+    url: "{{ vault_addr }}/v1/sys/seal-status"
+    method: GET
+    validate_certs: "{{ vault_unseal_validate_certs }}"
+    status_code: "{{ vault_unseal_expected_status_codes }}"
+  register: vault_seal_status_after_init
+  changed_when: false
+
+- name: Define current Vault seal status
+  ansible.builtin.set_fact:
+    vault_current_seal_status: "{{ vault_seal_status_after_init.json }}"
+
+- name: Verify Vault unseal key is available when sealed
+  ansible.builtin.assert:
+    that:
+      - vault_unseal_keys is defined
+      - (vault_unseal_keys | length) >= 1
+    fail_msg: "Vault is sealed and no unseal key is available. Provide vault_unseal_keys or initialize Vault in this run."
+  no_log: true
+  when: vault_current_seal_status.sealed | bool
+
+- name: Unseal Vault with unseal key
   ansible.builtin.uri:
     url: "{{ vault_addr }}/v1/sys/unseal"
     method: PUT
     body_format: json
     body:
-      key: "{{ item }}"
+      key: "{{ vault_unseal_keys[0] }}"
     validate_certs: "{{ vault_unseal_validate_certs }}"
     status_code: "{{ vault_unseal_expected_status_codes }}"
-  loop: "{{ vault_unseal_keys }}"
+  register: vault_unseal_result
+  changed_when: true
   no_log: true
-  when: vault_seal_status.json.sealed | bool
+  when: vault_current_seal_status.sealed | bool
 
 - name: Verify final Vault status
   ansible.builtin.uri:
@@ -49,6 +94,7 @@
     validate_certs: "{{ vault_unseal_validate_certs }}"
     status_code: "{{ vault_unseal_expected_status_codes }}"
   register: vault_final_seal_status
+  changed_when: false
 
 - name: Assert Vault is unsealed
   ansible.builtin.assert:

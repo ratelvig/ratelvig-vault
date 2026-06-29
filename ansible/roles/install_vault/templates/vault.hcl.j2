@@ -12,5 +12,8 @@ storage "file" {
 listener "tcp" {
   address = "{{ vault_listener_address }}"
   cluster_address = "{{ vault_cluster_address }}"
-  tls_disable = true
+
+  tls_cert_file = "{{ vault_tls_cert_file }}"
+  tls_key_file  = "{{ vault_tls_key_file }}"
+  tls_min_version = "tls12"
 }

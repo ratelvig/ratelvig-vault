@@ -2,3 +2,6 @@
 vault_unseal_validate_certs: false
 vault_unseal_expected_status_codes:
   - 200
+
+vault_init_secret_shares: 1
+vault_init_secret_threshold: 1

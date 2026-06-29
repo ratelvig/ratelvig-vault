@@ -7,12 +7,30 @@ vault_group: vault
 vault_config_dir: /etc/vault.d
 vault_config_file: "{{ vault_config_dir }}/vault.hcl"
 vault_data_dir: /opt/vault/data
-vault_tls_dir: /opt/vault/tls
+vault_tls_dir: /etc/vault.d/tls
+vault_tls_cert_file: "{{ vault_tls_dir }}/vault.crt"
+vault_tls_key_file: "{{ vault_tls_dir }}/vault.key"
 
 vault_disable_mlock: true
 
 vault_listener_address: "0.0.0.0:8200"
 vault_cluster_address: "0.0.0.0:8201"
 
-vault_api_addr: "http://{{ ansible_host }}:8200"
-vault_cluster_addr: "http://{{ ansible_host }}:8201"
+vault_api_addr: "https://{{ ansible_host }}:8200"
+vault_cluster_addr: "https://{{ ansible_host }}:8201"
+
+vault_server_common_name: "{{ inventory_hostname }}"
+vault_server_alt_names:
+  - "{{ inventory_hostname }}"
+vault_server_ip_sans:
+  - "{{ ansible_host }}"
+vault_bootstrap_common_name: "{{ vault_server_common_name }}"
+vault_bootstrap_cert_ttl_days: 7
+
+vault_health_status_codes:
+  - 200
+  - 429
+  - 472
+  - 473
+  - 501
+  - 503

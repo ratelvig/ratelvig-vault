@@ -9,10 +9,8 @@
   ansible.builtin.apt:
     name:
       - ca-certificates
-      - curl
       - gnupg
-      - lsb-release
-      - unzip
+      - python3-cryptography
     state: present
     update_cache: true
 
@@ -27,14 +25,14 @@
 - name: Download HashiCorp GPG key
   ansible.builtin.get_url:
     url: https://apt.releases.hashicorp.com/gpg
-    dest: /tmp/hashicorp.gpg
+    dest: /etc/apt/keyrings/hashicorp.asc
     owner: root
     group: root
     mode: "0644"
 
 - name: Convert HashiCorp GPG key to keyring format
   ansible.builtin.command:
-    cmd: gpg --dearmor -o /etc/apt/keyrings/hashicorp-archive-keyring.gpg /tmp/hashicorp.gpg
+    cmd: gpg --dearmor -o /etc/apt/keyrings/hashicorp-archive-keyring.gpg /etc/apt/keyrings/hashicorp.asc
     creates: /etc/apt/keyrings/hashicorp-archive-keyring.gpg
 
 - name: Set permissions on HashiCorp keyring
@@ -98,6 +96,54 @@
       group: "{{ vault_group }}"
       mode: "0750"
 
+- name: Check existing Vault TLS private key
+  ansible.builtin.stat:
+    path: "{{ vault_tls_key_file }}"
+  register: vault_tls_private_key_file
+
+- name: Check existing Vault TLS certificate
+  ansible.builtin.stat:
+    path: "{{ vault_tls_cert_file }}"
+  register: vault_tls_certificate_file
+
+- name: Generate bootstrap Vault TLS private key
+  community.crypto.openssl_privatekey:
+    path: "{{ vault_tls_key_file }}"
+    type: RSA
+    size: 4096
+    owner: root
+    group: "{{ vault_group }}"
+    mode: "0640"
+  no_log: true
+  when: not vault_tls_private_key_file.stat.exists
+
+- name: Generate bootstrap Vault TLS CSR
+  community.crypto.openssl_csr:
+    path: "{{ vault_tls_dir }}/bootstrap.csr"
+    privatekey_path: "{{ vault_tls_key_file }}"
+    common_name: "{{ vault_bootstrap_common_name }}"
+    subject_alt_name: >-
+      {{
+        (vault_server_alt_names | default([]) | map('regex_replace', '^', 'DNS:') | list)
+        + (vault_server_ip_sans | default([]) | map('regex_replace', '^', 'IP:') | list)
+      }}
+    owner: root
+    group: "{{ vault_group }}"
+    mode: "0640"
+  when: not vault_tls_certificate_file.stat.exists or not vault_tls_private_key_file.stat.exists
+
+- name: Generate temporary self-signed bootstrap Vault TLS certificate
+  community.crypto.x509_certificate:
+    path: "{{ vault_tls_cert_file }}"
+    csr_path: "{{ vault_tls_dir }}/bootstrap.csr"
+    privatekey_path: "{{ vault_tls_key_file }}"
+    provider: selfsigned
+    selfsigned_not_after: "+{{ vault_bootstrap_cert_ttl_days }}d"
+    owner: root
+    group: "{{ vault_group }}"
+    mode: "0640"
+  when: not vault_tls_certificate_file.stat.exists or not vault_tls_private_key_file.stat.exists
+
 - name: Deploy Vault configuration
   ansible.builtin.template:
     src: vault.hcl.j2
@@ -140,6 +186,17 @@
     port: 8200
     timeout: 30
 
+- name: Verify that Vault answers over TLS
+  ansible.builtin.uri:
+    url: "{{ vault_api_addr }}/v1/sys/health"
+    method: GET
+    status_code: "{{ vault_health_status_codes }}"
+    validate_certs: false
+  register: vault_tls_health
+  retries: 30
+  delay: 2
+  until: vault_tls_health.status is defined and vault_tls_health.status in vault_health_status_codes
+
 - name: Display post-installation information
   ansible.builtin.debug:
     msg:
@@ -147,5 +204,5 @@
       - "Vault API URL: {{ vault_api_addr }}"
       - "Vault UI URL: {{ vault_api_addr }}/ui"
       - "The backend used is file: {{ vault_data_dir }}"
-      - "TLS is disabled in this homelab configuration."
-      - "It is now necessary to manually initialize Vault."
+      - "Vault is listening with TLS from bootstrap."
+      - "If this is the first deployment, Vault must now be initialized and unsealed."

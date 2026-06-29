@@ -4,5 +4,13 @@
   become: true
   gather_facts: true
 
+  vars_files:
+    - ../vault/secrets.yml
+
   roles:
     - role: install_vault
+    - role: unseal_vault
+      become: false
+      vars:
+        vault_addr: "{{ vault_https_addr }}"
+    - role: configure_vault
