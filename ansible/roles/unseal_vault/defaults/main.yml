@@ -1,4 +1,5 @@
 ---
+vault_addr: "{{ vault_api_addr | default('') }}"
 vault_unseal_validate_certs: false
 vault_unseal_expected_status_codes:
   - 200

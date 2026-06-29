@@ -10,13 +10,10 @@ vault_data_dir: /opt/vault/data
 vault_tls_dir: /etc/vault.d/tls
 vault_tls_cert_file: "{{ vault_tls_dir }}/vault.crt"
 vault_tls_key_file: "{{ vault_tls_dir }}/vault.key"
-vault_tls_ca_file: "{{ vault_tls_dir }}/vault-ca.crt"
-vault_tls_final_marker_file: "{{ vault_tls_dir }}/.vault-issued-cert"
+vault_tls_server_cert_marker_file: "{{ vault_tls_dir }}/.vault-issued-cert"
 
 vault_bootstrap_common_name: "{{ vault_server_common_name }}"
 vault_bootstrap_cert_ttl_days: 7
-
-vault_https_addr: "https://{{ ansible_host }}:8200"
 
 vault_api_addr: "https://{{ ansible_host }}:8200"
 vault_cluster_addr: "https://{{ ansible_host }}:8201"
@@ -29,8 +26,8 @@ vault_disable_mlock: true
 vault_pki_mount: pki
 vault_pki_max_lease_ttl: "87600h"
 
-vault_ca_common_name: "RateLVIG Root CA"
-vault_ca_ttl: "87600h"
+vault_pki_ca_common_name: "RateLVIG Root CA"
+vault_pki_ca_ttl: "87600h"
 
 vault_pki_role_name: "ratelvig-server"
 vault_pki_allowed_domains:

@@ -1,2 +1,5 @@
 ---
 vault_token: "{{ vault_root_token }}"
+vault_pki_ca_common_name: "Vault Root CA"
+vault_pki_ca_ttl: "87600h"
+vault_tls_server_cert_marker_file: "{{ vault_tls_dir }}/.vault-issued-cert"
