@@ -174,6 +174,61 @@ The final Vault certificate and key are stored under:
 The generated Vault CA certificate is printed by the playbook. Trust that CA on
 client machines that need to access Vault without certificate warnings.
 
+## Kubernetes prerequisites
+
+### 1. Enable the Kubernetes authentication method
+
+```bash
+vault auth enable kubernetes
+```
+
+### 2. Create the PKI role for certificate issuance
+
+This role defines the allowed domains and the maximum validity period for issued certificates:
+
+```bash
+vault write pki/roles/cert-manager-role \
+  allowed_domains="ratelvig-kube.local" \
+  allow_subdomains=true \
+  allow_bare_domains=true \
+  allow_glob_domains=false \
+  allow_any_name=false \
+  enforce_hostnames=true \
+  max_ttl="720h"
+```
+
+### 3. Create the ACL policy (`pki-policy`)
+
+This policy authorizes cert-manager to sign and issue certificates through the PKI role:
+
+```bash
+vault policy write pki-policy - <<EOF
+path "pki/sign/cert-manager-role" {
+  capabilities = ["create", "update"]
+}
+
+path "pki/issue/cert-manager-role" {
+  capabilities = ["create", "update"]
+}
+
+path "pki/cert/ca" {
+  capabilities = ["read"]
+}
+EOF
+```
+
+### 4. Create the Kubernetes authentication role
+
+This role binds the `cert-manager-vault-sa` ServiceAccount (in the `cert-manager` namespace) to the `pki-policy` policy:
+
+```bash
+vault write auth/kubernetes/role/cert-manager-vault-role \
+  bound_service_account_names=cert-manager-vault-sa \
+  bound_service_account_namespaces=cert-manager \
+  policies=pki-policy \
+  ttl=24h
+```
+
 ## Common commands
 
 ```bash

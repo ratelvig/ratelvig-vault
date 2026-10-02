@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-DIR=$(basename "$(pwd)")
+DIR=$(basename "$(dirname "$(pwd)")")
 MSYS_NO_PATHCONV=1 docker run --name molecule-controller--${DIR} -it --rm \
 -v "$HOME/.docker:/root/.docker" \
 -v "$HOME/.ssh:/tmp/.ssh:ro" \
